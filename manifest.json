@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "Phishing Email Detection using AI",
+  "version": "1.0.0",
+  "description": "AI-powered phishing detection using OpenAI for secure email analysis. A Major Project by Armaan & Sathish.",
+  "permissions": ["activeTab", "storage", "scripting", "tabs"],
+  "host_permissions": ["*://mail.google.com/*", "*://*.hotmail.com/*"],
+  "content_scripts": [
+    {
+      "matches": ["*://mail.google.com/*", "*://*.hotmail.com/*"],
+      "js": ["content.js"],
+      "type": "module",
+
+      "css": ["styles.css"]
+    }
+  ],
+  "action": {
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}
