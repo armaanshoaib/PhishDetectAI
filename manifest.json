@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Phishing Email Detection using AI",
   "version": "1.0.0",
-  "description": "AI-powered phishing detection using OpenAI for secure email analysis. A Major Project by Armaan & Sathish.",
+  "description": "AI-powered phishing detection using OpenAI for secure email analysis.",
   "permissions": ["activeTab", "storage", "scripting", "tabs"],
   "host_permissions": ["*://mail.google.com/*", "*://*.hotmail.com/*"],
   "content_scripts": [
