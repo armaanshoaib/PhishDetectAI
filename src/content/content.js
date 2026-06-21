@@ -15,6 +15,83 @@ let status = {
   error: null,
 };
 
+// Safe storage access helpers
+const memoryStorage = {};
+
+async function getStorageData(keys) {
+  return new Promise((resolve) => {
+    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.storage && chrome.storage.local) {
+      chrome.storage.local.get(keys, resolve);
+    } else {
+      const result = {};
+      const keyList = Array.isArray(keys) ? keys : [keys];
+      keyList.forEach(key => {
+        result[key] = memoryStorage[key];
+      });
+      resolve(result);
+    }
+  });
+}
+
+async function setStorageData(data) {
+  return new Promise((resolve) => {
+    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.storage && chrome.storage.local) {
+      chrome.storage.local.set(data, resolve);
+    } else {
+      Object.assign(memoryStorage, data);
+      resolve();
+    }
+  });
+}
+
+async function getSettings() {
+  const items = await getStorageData(['apiKey', 'provider', 'model', 'strictness']);
+  return {
+    provider: items.provider || CONFIG.provider || 'openai',
+    apiKey: items.apiKey || CONFIG.OPENAI_API_KEY || '',
+    model: items.model || CONFIG.model || 'gpt-4o-mini',
+    strictness: items.strictness || 'balanced'
+  };
+}
+
+async function saveScanToStorage(emailData, results) {
+  // 1. Save stats
+  const stats = await getStorageData(['stats_total', 'stats_safe', 'stats_suspicious', 'stats_phishing']);
+  const total = (stats.stats_total || 0) + 1;
+  let safe = stats.stats_safe || 0;
+  let suspicious = stats.stats_suspicious || 0;
+  let phishing = stats.stats_phishing || 0;
+  
+  if (results.riskLevel === 'low') safe++;
+  else if (results.riskLevel === 'medium') suspicious++;
+  else if (results.riskLevel === 'high') phishing++;
+  
+  await setStorageData({
+    stats_total: total,
+    stats_safe: safe,
+    stats_suspicious: suspicious,
+    stats_phishing: phishing
+  });
+
+  // 2. Save history
+  const hist = await getStorageData(['scan_history']);
+  let history = hist.scan_history || [];
+  const entry = {
+    id: Date.now().toString(),
+    timestamp: Date.now(),
+    subject: emailData.subject || '(No Subject)',
+    senderEmail: emailData.senderEmail || 'unknown',
+    senderName: emailData.senderName || 'Unknown Sender',
+    riskLevel: results.riskLevel || 'unknown',
+    confidenceScore: results.confidenceScore || 0,
+    summary: results.finalAssessment?.summary || ''
+  };
+  
+  history.unshift(entry);
+  history = history.slice(0, 20);
+  await setStorageData({ scan_history: history });
+}
+
 // Configuration toggle
 const AI_CONFIG = {
   provider: CONFIG.provider || 'openai', // Use config value or default to 'openai'
@@ -32,6 +109,15 @@ const AI_CONFIG = {
 
 // Initialize WebLLM engine
 async function initializeEngine() {
+  const settings = await getSettings();
+  AI_CONFIG.provider = settings.provider;
+  if (settings.provider === 'openai') {
+    AI_CONFIG.openai.apiKey = settings.apiKey;
+    AI_CONFIG.openai.model = settings.model;
+  } else {
+    AI_CONFIG.webllm.model = settings.model;
+  }
+
   status.provider = AI_CONFIG.provider;
   status.stage = 'initializing';
   status.message = 'Starting initialization...';
@@ -115,12 +201,12 @@ function updatePopup() {
 }
 
 // Extract email data for analysis
-async function extractEmailData() {
+async function extractEmailData(container) {
   const provider = detectProvider();
   if (!provider) {
     throw new Error('No supported email provider detected');
   }
-  return extractEmailContent(provider);
+  return extractEmailContent(provider, container);
 }
 
 // Main observer to detect when emails are opened
@@ -134,7 +220,7 @@ const observer = new MutationObserver(async (mutations) => {
       emailContainer.dataset.analyzed = 'true';
 
       try {
-        const emailData = await extractEmailData();
+        const emailData = await extractEmailData(emailContainer);
         const loadingBanner = showLoadingState(provider, PROVIDERS);
 
         // Show loading state while analyzing
@@ -142,6 +228,10 @@ const observer = new MutationObserver(async (mutations) => {
         createAnalysisUI({ riskLevel: 'analyzing' }, provider, PROVIDERS, status);
 
         const results = await analyzeEmail(emailData);
+        
+        // Save scan statistics and history
+        await saveScanToStorage(emailData, results);
+        
         createAnalysisUI(results, provider, PROVIDERS, status);
 
         status.analyzing--;
@@ -178,6 +268,17 @@ initializeEngine();
 
 // Analyze email content using WebLLM
 async function analyzeEmail(emailData) {
+  // Always load latest configuration settings
+  const settings = await getSettings();
+  AI_CONFIG.provider = settings.provider;
+  if (settings.provider === 'openai') {
+    AI_CONFIG.openai.apiKey = settings.apiKey;
+    AI_CONFIG.openai.model = settings.model;
+  } else {
+    AI_CONFIG.webllm.model = settings.model;
+  }
+  const strictness = settings.strictness;
+
   if (!status.isLoaded) {
     try {
       await initializeEngine();
@@ -202,8 +303,23 @@ async function analyzeEmail(emailData) {
     throw new Error('WebLLM engine failed to initialize');
   }
 
+  // Generate dynamic guidance based on configured strictness level
+  let strictnessGuidance = "";
+  if (strictness === 'generous') {
+    strictnessGuidance = "Only flag if it is an obvious fraud or malicious credential harvesting attempt. Be very generous and don't flag normal newsletters, billing notices, or standard business emails.";
+  } else if (strictness === 'strict') {
+    strictnessGuidance = "Be highly critical and strict. Treat mismatched sender info, urgent call-to-actions, external links, and requests for sensitive data as strong phishing signals.";
+  } else {
+    strictnessGuidance = "Weigh risks and legitimate business patterns. Most emails from Google, Amazon, YouTube, and Banks are safe. Look for standard urgency or suspicious links.";
+  }
+
   // Simplified prompt for WebLLM mode
-  const webllmPrompt = `Analyze this email for phishing risks. Keep it simple. Most of them that I provide will generally be safe from Google, Amazon, YouTube, Kotak Banks etc. So please try to be generous and be less strict. 
+  const webllmPrompt = `Analyze this email for phishing risks. Keep it simple. 
+Strictness Level Guidance: ${strictnessGuidance}
+
+Email Sender Details:
+- Name: ${emailData.senderName || 'Unknown'}
+- Email Address: ${emailData.senderEmail || 'Unknown'}
 
 Email Subject: ${emailData.subject}
 Email Body: ${emailData.body}
@@ -214,7 +330,7 @@ Look for:
 2. Requests for sensitive information
 3. Suspicious links or attachments
 4. Poor grammar or formatting
-5. Mismatched sender info
+5. Mismatched sender info (e.g. sender email domain does not align with the sender name brand)
 
 Respond with a JSON object containing:
 {
@@ -251,8 +367,17 @@ Respond with a JSON object containing:
 }`;
 
   // Full prompt for OpenAI mode
-  const openaiPrompt = `You are an expert email security system. Analyze this email carefully, considering both phishing indicators AND legitimate business patterns. Most of them that I provide will generally be safe from Google, Amazon, YouTube, Kotak Banks etc. So please try to be generous and be less strict.
+  const openaiPrompt = `You are an expert email security system. Analyze this email carefully, considering both phishing indicators AND legitimate business patterns.
   
+  STRICTNESS POLICY CONFIGURATION:
+  ${strictnessGuidance}
+
+  EMAIL METADATA:
+  - Sender Display Name: ${emailData.senderName || 'Unknown'}
+  - Sender Email Address: ${emailData.senderEmail || 'Unknown'}
+  - Email Subject: ${emailData.subject}
+  - Attachments: ${emailData.attachments.map((a) => `${a.name} (${a.type})`).join(', ') || 'None'}
+
   CONTEXT ANALYSIS:
   1. Business Communication Patterns:
   - Expected business hours communication
@@ -271,16 +396,15 @@ Respond with a JSON object containing:
   - Document collaboration requests
   
   3. Risk Indicators (weighted by context):
-  - Sender legitimacy and history
+  - Sender legitimacy and history (Does the sender email domain match the company name of the sender's display name? e.g., display name "Kotak Bank" but sender is "xyz@free-web-mail.com" is high risk)
   - Communication tone and urgency
   - Credential/information requests
   - Link/attachment patterns
   - Language and formatting
   - Business context alignment
   
-  Email Subject: ${emailData.subject}
-  Email Body: ${emailData.body}
-  Attachments: ${emailData.attachments.map((a) => `${a.name} (${a.type})`).join(', ') || 'None'}
+  Email Body:
+  ${emailData.body}
   
   First, determine if this matches known legitimate patterns:
   1. Is this a standard business communication?

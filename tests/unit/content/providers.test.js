@@ -59,6 +59,21 @@ describe('Email Content Extraction', () => {
     });
   });
 
+  test('should extract sender name and email from Gmail container', () => {
+    const emailContainer = document.createElement('div');
+    emailContainer.innerHTML = `
+      <div class="a3s">Scoped Body Content</div>
+      <span class="gD" email="sender@example.com" name="John Doe">John Doe</span>
+    `;
+    const emailContent = extractEmailContent('GMAIL', emailContainer);
+    expect(emailContent).toMatchObject({
+      subject: 'Test Subject', // fallback to global
+      body: 'Scoped Body Content',
+      senderEmail: 'sender@example.com',
+      senderName: 'John Doe',
+    });
+  });
+
   test('should handle missing content gracefully', () => {
     document.body.innerHTML = '<div class="adn ads"></div>';
     const emailContent = extractEmailContent('GMAIL');
@@ -66,6 +81,8 @@ describe('Email Content Extraction', () => {
       subject: '',
       body: '',
       attachments: [],
+      senderEmail: '',
+      senderName: '',
     });
   });
 
