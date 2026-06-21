@@ -440,12 +440,11 @@ async function analyzeEmailWithOpenAI(prompt) {
 
   try {
     const response = await Promise.race([
-      fetch('https://api.openai.com/v1/chat/completions', {
+      fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${openaiConfig.apiKey}`,
-          'OpenAI-Beta': 'assistants=v1', // Enable latest features
+          Authorization: `Bearer ${openaiConfig.apiKey}`
         },
         body: JSON.stringify({
           model: openaiConfig.model,
@@ -485,12 +484,11 @@ async function analyzeEmailWithOpenAI(prompt) {
   } catch (error) {
     // If it's a rate limit error or model overload, try backup model
     if (error.message.includes('rate_limit') || error.message.includes('overloaded')) {
-      const backupResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+      const backupResponse = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${openaiConfig.apiKey}`,
-          'OpenAI-Beta': 'assistants=v1',
         },
         body: JSON.stringify({
           model: openaiConfig.backupModel,
